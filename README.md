@@ -1,6 +1,6 @@
 # API Integration Hub
 
-This repository is a central hub for API worker projects designed to extract, process, and synchronize data into Google Sheets. Each worker is implemented with secure credential handling, GitHub Actions orchestration, and daily scheduling for downstream dashboard and analytics use cases.
+This is a central hub for API worker projects designed to extract, process, and synchronize data into Google Sheets. Each worker is implemented with secure credential handling, GitHub Actions orchestration, and daily scheduling for downstream dashboard and analytics use cases.
 
 ## Navigation
 
@@ -12,6 +12,7 @@ This repository is a central hub for API worker projects designed to extract, pr
   - [Hablla Integration Worker](#hablla-integration-worker)
   - [Zenvia Integration Worker](#zenvia-integration-worker)
   - [SIGE Integration Worker](#sige-integration-worker)
+  - [Omie Integration Worker](#omie-integration-worker)
 - [Security and Data Handling](#security-and-data-handling)
 - [Daily Execution Flow](#daily-execution-flow)
 - [Usage Guide](#usage-guide)
@@ -19,13 +20,13 @@ This repository is a central hub for API worker projects designed to extract, pr
 
 ## Overview
 
-This hub combines five public API integration workers sourced from GitHub. The goal is to provide a consolidated reference for:
+This hub combines public API integration workers sourced from GitHub. The goal is to provide a consolidated reference for:
 
 - automated daily token orchestration
 - API-specific extraction and processing logic
 - secure secret management via GitHub Actions
 - data synchronization into Google Sheets
-- support for later dashboard consumption and analytics
+- support for downstream dashboard consumption and analytics
 
 Each worker is implemented as an independent repository, with specific endpoints, token handling, and rate-limit controls.
 
@@ -39,22 +40,26 @@ flowchart LR
     C --> E[worker-hablla-integration]
     C --> F[worker-zenvia-integration]
     C --> G[worker-sige-auth]
-    D --> H[Zoho Creator API]
-    E --> I[Hablla API]
-    F --> J[Zenvia Voice API]
-    G --> K[SIGE API]
-    H --> L[Google Sheets]
-    I --> L
-    J --> L
-    G --> L
+    C --> H[worker-omie-integration]
+    D --> I[Zoho Creator API]
+    E --> J[Hablla API]
+    F --> K[Zenvia Voice API]
+    G --> L[SIGE API]
+    H --> M[Omie ERP API]
+    I --> N[Google Sheets]
+    J --> N
+    K --> N
+    L --> N
+    M --> N
     subgraph Dashboards
-      L
+      N
     end
     X[GitHub Secrets] --> B
     X --> D
     X --> E
     X --> F
     X --> G
+    X --> H
 ```
 
 ## Worker Summaries
@@ -83,6 +88,7 @@ The Google Auth worker is the orchestration entry point for this hub. It creates
   - `operacoesicaiu/worker-zenvia-integration`
   - `operacoesicaiu/worker-hablla-integration`
   - `operacoesicaiu/worker-sige-auth`
+  - `operacoesicaiu/worker-omie-integration`
 - Supports manual override via `REPO_MANUAL`
 
 #### Security and token handling
@@ -174,7 +180,6 @@ This secondary Zoho worker synchronizes a larger report dataset and merges it in
 ### Hablla Integration Worker
 
 - Repository: https://github.com/operacoesicaiu/worker-hablla-integration
-- Local path: `./worker-hablla-integration-main/worker-hablla-integration-main`
 
 This worker fetches Hablla cards, attendance summaries, and client records, then pushes them into Google Sheets with cleanup and duplicate removal.
 
@@ -296,6 +301,73 @@ flowchart TD
     GS -->|Billing dataset| Dashboard[Dashboard Base]
 ```
 
+### Omie Integration Worker
+
+- Repository: https://github.com/lojadosapo/worker-omie-integration
+
+This worker integrates with the Omie ERP API to fetch sales orders and product data, then synchronizes them into Google Sheets for dashboard consumption and analytics.
+
+#### Core behavior
+
+- Authenticates with Omie API using app key and secret
+- Retrieves sales orders within a configurable date range (default: today)
+- Extracts sales representative and product-level data
+- Sanitizes all string fields to prevent spreadsheet formula injection
+- Writes processed data to two separate sheets: `Vendedor` and `Produtos e Servicos`
+- Supports pagination for large datasets (100 records per page)
+
+#### Workflow
+
+- Triggered by `repository_dispatch` event type `google_token_ready`
+- Requires `GOOGLE_TOKEN` plus Omie API credentials
+- Uses optional environment variables `DATA_INICIO` and `DATA_FIM` for custom date ranges
+- Default behavior: fetches orders from today
+
+#### Security and data handling
+
+- Stores Omie API credentials (`APP_KEY`, `APP_SECRET`) in GitHub Secrets
+- Uses `SPREADSHEET_ID` to target the destination Google Sheet
+- `GOOGLE_TOKEN` is injected from the Google Auth worker
+- All values are sanitized using a `sanitize()` helper that prefixes dangerous strings
+- Sensitive API responses are masked in logs
+
+#### Data extracted
+
+**Vendedor (Sales by Representative):**
+- Date
+- Sales representative name
+- Total order value
+- Order number
+
+**Produtos e Servicos (Products and Services):**
+- Date
+- Product description
+- Quantity
+- Unit value
+- Sales representative name
+
+#### Rate limiting and performance
+
+- Uses a 200ms delay between paginated requests to respect Omie API rate limits
+- Processes up to 100 records per page
+- Continues pagination until all records are fetched
+- Batch writes all rows at once to Google Sheets
+
+#### Limitations
+
+- Dependent on Omie API schema and field availability
+- Date range filtering relies on `filtrar_por_data_de` and `filtrar_por_data_ate` parameters
+- Requires target Google Sheet to have both `Vendedor` and `Produtos e Servicos` tabs
+- The worker does not perform historical reconciliation; it appends data on each run
+
+```mermaid
+flowchart TD
+    OMIE[Omie ERP API] -->|Orders and products| OW[Omie Integration Worker]
+    OW -->|Sales and product data| GS[Google Sheets]
+    OW -->|Secure logging| LOG[Secure Logger]
+    GH[GitHub Secrets] --> OW
+```
+
 ## Security and Data Handling
 
 All workers follow a consistent security model:
@@ -316,10 +388,12 @@ flowchart TB
     B -->|Update secret & dispatch| D[Hablla worker]
     B -->|Update secret & dispatch| E[Zenvia worker]
     B -->|Update secret & dispatch| F[SIGE worker]
-    C --> G[Google Sheets]
-    D --> G
-    E --> G
-    F --> G
+    B -->|Update secret & dispatch| G[Omie worker]
+    C --> H[Google Sheets]
+    D --> H
+    E --> H
+    F --> H
+    G --> H
 ```
 
 ## Usage Guide
@@ -332,12 +406,25 @@ flowchart TB
 
 ## Repository References
 
+To view the source code for each worker and its GitHub Actions configuration, see the following repositories:
+
+### Available Repositories
+
 - `worker-google-auth`: https://github.com/operacoesicaiu/worker-google-auth
 - `worker-zoho-integration`: https://github.com/operacoesicaiu/worker-zoho-integration
 - `worker-hablla-integration`: https://github.com/operacoesicaiu/worker-hablla-integration
 - `worker-zenvia-integration`: https://github.com/operacoesicaiu/worker-zenvia-integration
 - `worker-sige-auth`: https://github.com/operacoesicaiu/worker-sige-auth
 
+### Loja do Sapo Implementations
+
+Loja do Sapo uses the same worker architecture with similar implementations. Most workers share identical or nearly identical code but are deployed and configured separately:
+
+- `worker-google-auth`: https://github.com/lojadosapo/worker-google-auth
+- `worker-zoho-integration`: https://github.com/lojadosapo/worker-zoho-integration
+- `worker-hablla-integration`: https://github.com/lojadosapo/worker-hablla-integration
+- `worker-omie-integration`: https://github.com/lojadosapo/worker-omie-integration
+
 ---
 
-This document serves as a professional central reference for the integrated API worker hub, with detailed per-repository diagrams, security notes, and execution behavior.
+This document serves as a technical reference for the integrated API worker hub, with detailed per-worker documentation, diagrams, security notes, and execution behavior.
